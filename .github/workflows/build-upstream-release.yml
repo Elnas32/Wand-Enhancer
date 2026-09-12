@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Upstream tag to build (default: latest upstream release)
+        description: "Upstream tag to build (default: latest upstream release)"
         required: false
       force:
         description: Rebuild even if this tag was already published here
