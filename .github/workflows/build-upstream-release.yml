@@ -1,0 +1,86 @@
+name: Build upstream release
+
+on:
+  schedule:
+    # Daily at 06:00 UTC.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream tag to build (default: latest upstream release)
+        required: false
+      force:
+        description: Rebuild even if this tag was already published here
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    env:
+      UPSTREAM: k1tbyte/Wand-Enhancer
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Resolve upstream tag
+        id: resolve
+        shell: pwsh
+        run: |
+          $tag = '${{ inputs.tag }}'
+          if (-not $tag) {
+            $tag = gh release view --repo $env:UPSTREAM --json tagName -q .tagName
+            if ($LASTEXITCODE -ne 0 -or -not $tag) { throw "Could not read the latest release of $env:UPSTREAM." }
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>&1 | Out-Null
+          $alreadyBuilt = $LASTEXITCODE -eq 0
+          $global:LASTEXITCODE = 0
+
+          $skip = $alreadyBuilt -and ('${{ inputs.force }}' -ne 'true')
+          "skip=$($skip.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+
+          if ($skip) {
+            Write-Host "$tag has already been built here; nothing to do."
+          } else {
+            Write-Host "Building upstream tag $tag."
+          }
+
+      - uses: actions/checkout@v5
+        if: steps.resolve.outputs.skip != 'true'
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ steps.resolve.outputs.tag }}
+
+      - uses: pnpm/action-setup@v5
+        if: steps.resolve.outputs.skip != 'true'
+        with:
+          version: 10.17.0
+
+      - uses: actions/setup-node@v5
+        if: steps.resolve.outputs.skip != 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-panel/pnpm-lock.yaml
+
+      - name: Build release
+        if: steps.resolve.outputs.skip != 'true'
+        shell: pwsh
+        run: ./build.ps1 -Configuration Release
+
+      - name: Publish build
+        if: steps.resolve.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.resolve.outputs.tag }}
+          tag_name: ${{ steps.resolve.outputs.tag }}
+          # The upstream release notes already describe the changes; this body
+          # only records where the binary came from and that it is unsigned.
+          body: |
+            Unsigned build of [${{ env.UPSTREAM }}@${{ steps.resolve.outputs.tag }}](https://github.com/${{ env.UPSTREAM }}/releases/tag/${{ steps.resolve.outputs.tag }}).
+          files: WandEnhancer/bin/Release/WandEnhancer.exe
+          fail_on_unmatched_files: true
